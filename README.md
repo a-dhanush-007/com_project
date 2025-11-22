@@ -1,217 +1,211 @@
-# **1. UI (Frontend) Architecture**
+DevOps Design Take-Home Assignment
 
-UI Frontend Architecture – Explanation
+This repository contains the design documentation for a secure, scalable, and highly available web application architecture deployed on Amazon Web Services (AWS), along with a modern CI/CD pipeline.
 
-The frontend UI is deployed in an AWS VPC across multiple Availability Zones to ensure high availability. The UI files (HTML, CSS, JS) are stored in Amazon S3, which provides a durable and scalable storage layer.
-Traffic from users is routed through an Internet Gateway → VPC → ALB, which distributes traffic across multiple EC2 instances in an Auto Scaling Group.
+The design covers the following components:
 
-The Auto Scaling Group ensures horizontal scaling, automatically increasing or decreasing EC2 instances based on traffic.
-S3 is used for static assets and can be optionally combined with a CDN like CloudFront to improve global performance.
+UI (Frontend) Architecture: Secure, scalable hosting for a stateless frontend application (e.g., React/Vue).
 
-### **How the UI is hosted**
+API (Backend) Architecture: Scalable, secure deployment for a containerized backend service (e.g., Python/Node.js).
 
-The UI (React/Angular/Vue) is hosted in:
+Database Architecture: Resilient, high-availability relational database (PostgreSQL).
 
-* **Amazon S3** static website hosting
-* Distributed globally using **Amazon CloudFront (CDN)**
+CI/CD Pipeline: Automated workflow using Jenkins, GitHub, and Argo CD.
 
-### **How horizontal scaling works**
+1. UI (Frontend) Architecture Design
 
-* S3 is automatically scalable
-* CloudFront caches static assets at 300+ edge locations
-* No servers needed → completely stateless + auto-scale 
+Diagram Reference: 01 PA2.pdf
 
-### **How traffic is routed**
+The initial diagram in 01 PA2.pdf suggests using an ALB + EC2/Auto Scaling Group setup. For a purely static, stateless UI (like a built React application), a Serverless CDN-based approach offers better performance, resilience, and cost-effectiveness. The revised design focuses on the standard AWS S3 + CloudFront pattern.
 
-```
-User → Route 53 → CloudFront → S3 (Static Content) OR Internet Gateway → VPC → ALB
-```
+Component
 
-### **How CDN improves performance**
+Explanation
 
-* Caches JS, CSS, images, videos
-* Reduces latency
-* Reduces S3 load
-* Provides DDoS protection (via AWS Shield)
+Route 53
 
-### **How Availability Zones are used**
+Primary DNS service. Uses a simple A record aliased to the CloudFront distribution.
 
-* Static Content are stored redundantly across **multiple AZs** within S3
-* CloudFront edge locations provide global high availability
-* The UI remains available even if one AZ fails
+Amazon S3
 
----
+Hosting. The compiled, static UI assets (HTML, CSS, JS) are stored in an S3 bucket. The bucket is configured as a static website host (or configured for Object Lock if necessary).
 
-# **2. API (Backend) Architecture **
+CloudFront
 
-### **Where the API runs**
+CDN & Caching. Serves as the Content Delivery Network and Origin Shield. It caches the static content at Edge Locations globally, drastically reducing latency and load on the S3 bucket.
 
-The backend API runs on:
+Origin Access Control (OAC)
 
-* **AWS ECS Fargate** (serverless containers)
-  OR
-* **AWS EC2 Auto Scaling Group**
+Security. Ensures that CloudFront is the only service that can access the S3 bucket, preventing direct public access to the raw files (S3 is not public, only CloudFront is).
 
-### **How horizontal scaling works**
+Application Load Balancer (ALB)
 
-* ECS Fargate auto-scales based on:
+Not used in this design. The static UI is served directly via CloudFront.
 
-  * CPU usage
-  * Memory usage
-  * Request count
-* Tasks spread across multiple private subnets in different AZs
+Scaling Approach for UI
 
-### **How secrets are stored securely**
+Horizontal Scaling: Handled inherently by CloudFront. By serving content from globally distributed Edge Locations, the system can handle massive spikes in traffic without scaling the origin infrastructure (S3).
 
-* **AWS Secrets Manager** stores:
+Availability Zones: S3 and CloudFront are highly distributed global services by nature, providing multi-AZ and multi-region resilience for static asset delivery.
 
-  * DB credentials
-  * API keys
-  * Tokens
-* ECS retrieves secrets via **IAM Task Role**
-* No hardcoding of secrets
+Traffic Routing: Route 53 directs users to the nearest CloudFront Edge Location, which serves the cached content.
 
-### **How API communicates with Database**
+Maintenance: Deployments are near-instantaneous. New static assets are uploaded to S3, and a CloudFront Invalidation is triggered to clear the old cache, forcing the CDN to fetch the new version immediately.
 
-* ECS → RDS via private subnet (no internet exposure)
-* Strict **security group rules** (only backend SG → DB SG)
-* TLS-encrypted database connections
+2. API (Backend) Architecture Design
 
-### **How traffic enters the backend**
+Diagram Reference: 02 PA2.pdf
 
-Two options:
+The design uses Amazon API Gateway to handle routing and request throttling before passing traffic to a highly scalable containerized service running on AWS Fargate.
 
-* **Application Load Balancer (ALB)** → ECS
-* **API Gateway** → Lambda/ECS
+Component
 
-Typical path:
+Explanation
 
-```
-User → CloudFront → ALB → ECS Backend → RDS
-```
+Amazon API Gateway
 
----
+Traffic Entry & Routing. Acts as the single entry point. It provides request validation, throttling, and routing capabilities based on URL paths (/service 1, /service 2, etc.).
 
-# **3. Database Architecture **
+Amazon ECS (Fargate)
 
-### **DB technology**
+Where API Runs & Horizontal Scaling. The backend service is containerized (e.g., Docker) and deployed using AWS Fargate (Serverless compute for containers). Fargate eliminates the need to manage EC2 instances, simplifying the operation.
 
-* **Amazon RDS (PostgreSQL/MySQL/MariaDB)**
+Auto Scaling
 
----
+Scaling. ECS Service Auto Scaling monitors metrics (like CPU Utilization, Request Count) and automatically increases (or decreases) the number of Fargate tasks (containers) running the API.
 
-### **How scaling is handled**
+VPC & Private Subnets
 
-#### **1. Read Replicas (Horizontal Scaling)**
+Security. Fargate tasks run within private subnets, ensuring they are not directly accessible from the public internet. All traffic must pass through the API Gateway.
 
-* Multiple read replicas handle read-heavy workloads
-* Application routes read traffic to replicas
-* Primary DB handles writes
+AWS Secrets Manager
 
-#### **2. Vertical Scaling**
+Secrets Management. Used to securely store sensitive data (e.g., Database credentials, third-party API keys). Fargate tasks are granted permission via an IAM Role to retrieve secrets at runtime, preventing hardcoded secrets in containers.
 
-* Increase instance size (CPU/RAM) anytime
-* Switch to high IOPS storage (io1/io2)
+Secure Service-to-Database Communication
 
-#### **3. Multi-AZ Design (High Availability)**
+The Fargate tasks are in a Private Subnet.
 
-* Primary in **AZ-1**, synchronous standby in **AZ-2**
-* Automatic failover if primary goes down
-* No manual intervention required
+The RDS database is also in a Private Subnet.
 
----
+Communication is secured using Security Groups, where the RDS Security Group only allows inbound traffic (PostgreSQL port 5432) from the Security Group associated with the Fargate tasks. This ensures VPC-internal, private, and firewall-protected communication.
 
-### **Backup Plan**
+3. Database Architecture Design
 
-* Automated daily snapshots
-* Manual snapshots for major releases
-* Multi-day retention (7–35 days)
-* PITR (Point-In-Time Recovery) enabled
+Diagram Reference: 03 PH2.pdf
 
----
+The design utilizes Amazon RDS for PostgreSQL in a Multi-AZ configuration to ensure high availability and resilience.
 
-### **Migration Strategy**
+Feature
 
-* Version-controlled schema using **Flyway** or **Liquibase**
-* Migrations run automatically in CI/CD pipeline
-* Rollback supported using reversible migrations
-* Staging DB used for testing new schema before production rollout
+Explanation
 
----
+High Availability (HA)
 
-# **4. CI/CD Pipeline (GitHub Actions/Jenkins) **
+Multi-AZ Deployment. The database instance runs in a primary Availability Zone (AZ 'a'), with an automatically provisioned synchronous standby replica in a second AZ (AZ 'b'). In case of a failure in AZ 'a', RDS performs an automatic failover to the standby in AZ 'b'.
 
-### **Trigger Events**
+Read Scaling
 
-* **Push to `dev` branch** → deploy to Dev
-* **Pull Request to `main`** → run tests
-* **Merge to `main`** → deploy to Staging
-* **Manual approval** → deploy to Prod
+Read Replicas. Separate dedicated Read Replicas are deployed in additional AZs. The application will be configured to route read-heavy traffic to these replicas, reducing the load on the primary writer instance.
 
----
+Vertical Scaling
 
-### **Build Stage (concept only)**
+Instance Type Adjustment. When CPU, memory, or IOPS exceed acceptable thresholds, the instance class (e.g., upgrading from db.t3.medium to db.r6g.large) can be modified via a single RDS command. This requires a brief downtime during the application of the change.
 
-#### **Frontend**
+Backup Plan
 
-* `npm install`
-* `npm run build`
-* Compress & prepare frontend bundle
+Automated Snapshots. RDS performs daily automated snapshots, retained for 7 days.
 
-#### **Backend**
+Disaster Recovery
 
-* Install dependencies
-* Build application
-* Build Docker image (concept only)
+Point-in-Time Recovery (PITR). Enabled by Binary Logging (WAL), allowing recovery to any specific second within the retention window (e.g., up to 7 days).
 
----
+Migration Strategy
 
-### **Testing Workflow**
+Schema Versioning. We use a tool like Liquibase or Flyway to manage database schema changes. Migration scripts are version-controlled, and the CI/CD pipeline runs the required schema migrations before deploying the new API version. This ensures the database is compatible with the new code version.
 
-* Unit tests (frontend/backend)
-* Integration tests against test API
-* SonarQube static analysis (code quality)
-* Trivy container scan (vulnerabilities)
+4. CI/CD Pipeline Design
 
-If any step fails → pipeline stops.
+Diagram Reference: 04 PH2.pdf
 
----
+The CI/CD pipeline is designed for a containerized application, utilizing Jenkins for orchestration (CI) and Argo CD for GitOps-based continuous deployment (CD).
 
-### **Deployment Steps**
+Stage
 
-#### **Frontend**
+Tool
 
-1. Upload build artifacts to **S3**
-2. Invalidate **CloudFront** cache
-3. Update versioning tag
+Description & Health Check
 
-#### **Backend**
+1. Trigger
 
-1. Push Docker image → **AWS ECR**
-2. ArgoCD pulls new image
-3. Deploy to **AWS EKS** (or ECS)
-4. Rolling update ensures zero downtime
-5. Auto rollback on failure
+GitHub Webhook
 
----
+Triggered by a Pull Request (PR) merge into the main branch (for deployment) or a push to the feature branch (for test runs).
 
-### **Basic Health Checks**
+2. Code Quality & Security
 
-* ALB health checks for ECS tasks
-* `/health` endpoint for API
-* CloudWatch alarms (CPU, memory, errors)
-* Kubernetes liveness & readiness probes
+Jenkins + SonarQube
 
----
+Runs static code analysis (SAST) and unit tests. PRs are blocked if the Quality Gate fails.
 
-### **Promotion Strategy**
+3. Container Build & Scan
 
-```
-DEV → STAGING → PRODUCTION
-```
+Jenkins + Docker + Aqua Trivy
 
-* Dev: automatic deployment
-* Staging: tested by QA
-* Prod: manual approval required
-* ArgoCD syncs changes automatically
+Builds the Docker image based on the new source code. Aqua Trivy scans the final image for OS and application dependencies vulnerabilities. If a critical vulnerability is found, the pipeline stops (NO in the diagram), and a REPORT email notification is sent.
 
+4. Artifact Registry
+
+Amazon ECR
+
+On successful build and scan, the new, immutable Docker image is tagged and pushed to the Elastic Container Registry (ECR).
+
+5. Deployment (CD)
+
+Argo CD
+
+Argo CD monitors the Git repository's deployment manifest (GitOps). A successful image push triggers an update to the image tag in the Git manifest, and Argo CD automatically syncs the new version to the target environment.
+
+6. Health Checks & Verification
+
+Prometheus & Grafana
+
+After deployment, Prometheus monitors the /health endpoint of the new service. If the service returns a 200 OK within a grace period, the deployment is considered successful. Argo CD can manage rollout strategies like Blue/Green or Canary deployments for zero-downtime updates.
+
+Promotion Strategy (Dev → Stage → Prod)
+
+The promotion strategy follows a controlled flow to ensure stability:
+
+Develop (Dev): Every merge to main deploys automatically to the Dev environment (full CI/CD flow).
+
+Staging (Stage): A successful Dev deployment is automatically tagged. A manual approval step in Jenkins is required to promote the same artifact (ECR image tag) to the Staging environment.
+
+Production (Prod): After successful integration and UAT (User Acceptance Testing) in Staging, a second, highly restricted Manual Approval is required. Argo CD then syncs the same, tested artifact to the Production environment. This ensures artifact immutability across all environments.
+
+5. System Load Handling
+
+The entire architecture is designed to handle high load by focusing on distributing compute and serving static content globally.
+
+Component
+
+Load Handling Mechanism
+
+Frontend
+
+CloudFront absorbs the vast majority of requests and traffic spikes via global caching, drastically reducing load on the origin (S3).
+
+API Entry
+
+API Gateway provides throttling and caching layers, protecting the downstream Fargate tasks from uncontrolled burst traffic.
+
+Backend API
+
+ECS Fargate Auto Scaling dynamically adds or removes containers in seconds, ensuring linear scaling of the compute layer to match the request volume.
+
+Database
+
+Multi-AZ ensures immediate failover. Read Replicas offload read-heavy traffic from the Primary Writer, allowing the system to scale reads independently of writes.
+
+System Resiliency
+
+Running components across multiple Availability Zones protects the system against single data-center failures.
